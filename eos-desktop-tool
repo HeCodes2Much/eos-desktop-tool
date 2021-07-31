@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+
+install_folder="/tmp/EndeavourOS/"
+
+function close_app() {
+    printf "%s\n" "Closed app"
+    exit 0
+}
+
+function sudocmd() {
+    local yadcmd=(
+        yad --progress --width=450 \
+            --title="command progress" \
+            --pulsate --auto-close
+    )
+
+    if [[ $password ]]; then
+        echo -e "$password" \
+            | stdbuf -oL sudo -S $@ \
+            | stdbuf -oL sed -n '/\.\.\.$/ s/^/# /p' \
+            | ${yadcmd[@]}
+    else
+        check_sudo_password
+        sudocmd $@
+    fi
+}
+
+function install_desktop() {
+    case $@ in
+        BSPWM*)
+            wm="sxhkd bspwm"
+            ;;
+        i3*)
+            wm="i3-wm"
+            ;;
+        Sway*)
+            wm="sway"
+            ;;
+        *)
+            printf "%s can not be found\n" "$1"
+            exit 1
+            ;;
+    esac
+
+    if pacman -Qs "$wm" > /dev/null ; then
+        printf "%s is already installed on this system.\n" "$wm"
+    else
+        printf "%s will be installed on the system.\n" "$wm"
+        while true ; do
+            sudocmd "pacman -Sy "$wm" --noconfirm"
+            clone=$(git clone "https://github.com/endeavouros-team/endeavouros-i3wm-setup.git" "$install_folder/$wm" | ${yadcmd[@]})
+            break
+        done
+    fi
+}
+
+function uninstall_desktop() {
+    case $1 in
+        BSPWM*)
+            wm="sxhkd bspwm"
+            ;;
+        i3*)
+            wm="i3-wm"
+            ;;
+        Sway*)
+            wm="sway"
+            ;;
+        *)
+            printf "%s can not be found\n" "$1"
+            exit 1
+            ;;
+    esac
+
+    if ! pacman -Qs "$wm" > /dev/null ; then
+        printf "%s is not installed on this system.\n" "$wm"
+    else
+        printf "%s will be installed on the system.\n" "$wm"
+        while true ; do
+            sudocmd "pacman -Rns "$wm" --noconfirm"
+            sudocmd "rm -rf $install_folder/$wm"
+            break
+        done
+    fi
+}
+
+function check_desktop_configs() {
+    case $2 in
+        BSPWM*)
+            configs="$HOME/.config/sxhkd/sxhkdrc $HOME/.config/bspwm/bspwmrc"
+            wm="bspwm"
+            ;;
+        i3*)
+            configs="$HOME/.config/i3/config $HOME/.config/i3/i3blocks.conf"
+            wm="i3-wm"
+            ;;
+        Sway*)
+            configs="$HOME/.config/sway/config"
+            wm="sway"
+            ;;
+        *)
+            printf "%s can not be found\n" "$2"
+            exit 1
+            ;;
+    esac
+
+    case $1 in
+        add*)
+            for config in $configs; do
+                if [[ -f $config ]]; then
+                    mv $config $config.bak
+                else
+                    echo "$config"
+                    #mv $config $config
+                fi
+            done
+            ;;
+        remove*)
+            for config in $configs; do
+                if [[ -f $config.bak ]]; then
+                    rm $config
+                    mv $config.bak $config
+                else
+                    echo "$config"
+                    #mv $config.bak $config
+                fi
+            done
+            ;;
+    esac
+}
+
+function check_tool_configs() {
+    case $2 in
+        Dunst*)
+            configs="$HOME/.config/dunst/dunstrc"
+            ;;
+        Nitrogen*)
+            configs="$HOME/.config/nitrogen/bg-saved.cfg $HOME/.config/nitrogen/nitrogen.cfg"
+            ;;
+        Picom*)
+            configs="$HOME/.config/picom.conf"
+            ;;
+        Rofi*)
+            configs="$HOME/.config/rofi/config.rasi"
+            ;;
+        *)
+            printf "%s can not be found\n" "$2"
+            exit 1
+            ;;
+    esac
+
+    case $1 in
+        add*)
+            for config in $configs; do
+                if [[ -f $config ]]; then
+                    mv $config $config.bak
+                    echo $config
+                fi
+            done
+            ;;
+        remove*)
+            for config in $configs; do
+                if [[ -f $config ]]; then
+                    echo $config
+                    rm $config
+                    if [[ -f $config.bak ]]; then
+                        mv $config.bak $config
+                    fi
+                else
+                    echo $config
+                    if [[ -f $config.bak ]]; then
+                        mv $config.bak $config
+                    fi
+                fi
+            done
+            ;;
+    esac
+}
+
+function install-extra-tool () {
+    case $1 in
+        BSPWM*)
+            tools="FALSE Dunst false FALSE Nitrogen true FALSE Picom flase FALSE Rofi true"
+            ret=1
+            ;;
+        i3*)
+            tools="FALSE Dunst false FALSE Nitrogen true FALSE Picom flase FALSE Rofi true"
+            ret=1
+            ;;
+        Sway*)
+            tools="FALSE Dunst false FALSE Nitrogen true FALSE Picom flase FALSE Rofi true"
+            ret=1
+            ;;
+        *)
+            printf "%s can not be found\n" "$2"
+            exit 1
+            ;;
+    esac
+
+    while [ $ret -eq 1 ]; do
+        action=$(yad --list --checklist \
+        --text "Select extra tools." \
+        --image=system-settings \
+        --width "400" --height "300" \
+        --column "Select" --column "Tools" $tools \
+        --column "Required"\
+        --button="Close:0" \
+        --button="Install:2" \
+        --button="Uninstall:4")
+        ret=$?
+
+        if [[ $ret -eq 0 ]]; then
+            ${0##*/}
+        fi
+
+        if [[ $ret -eq 2 ]]; then
+            packages=
+            for tool in $action; do
+                action=$(echo $tool | awk -F"|" '{print $2}')
+                if [[ ${action} ]]; then
+                    packages+=("${action}")
+                    #check_tool_configs "add" ${action}
+                else
+                    ${0##*/}
+                fi
+            done
+
+            if [[ ${packages[@]} ]]; then
+                pkglist=$(echo -e "${packages[@]}" | awk '{print tolower($0)}')
+                printf "%s will be installed on the system.\n" "$pkglist"
+                #while true ; do
+                    #sudocmd "pacman -Sy "$pkglist" --noconfirm"
+                    #break
+                #done
+                ${0##*/}
+            else
+                exit 0
+            fi
+        fi
+
+        if [[ $ret -eq 4 ]]; then
+            packages=
+            for tool in $action; do
+                action=$(echo $tool | awk -F"|" '{print $2}')
+                if [[ ${action} ]]; then
+                    packages+=("${action}")
+                    check_tool_configs "remove" ${action}
+                else
+                    ${0##*/}
+                fi
+            done
+
+            if [[ ${packages[@]} ]]; then
+                pkglist=$(echo -e "${packages[@]}" | awk '{print tolower($0)}')
+                printf "%s will be uninstalled on the system.\n" "$pkglist"
+                #while true ; do
+                    #sudocmd "pacman -Rns "$pkglist" --noconfirm"
+                    #break
+                #done
+                ${0##*/}
+            else
+                exit 0
+            fi
+        fi
+    done
+}
+
+function eos-desktop-tool () {
+    ret=1
+    while [ $ret -eq 1 ]; do
+        action=$(yad --list --radiolist \
+        --text "Select a Desktop." \
+        --image=system-settings \
+        --width "400" --height "300" \
+        --column "Select" --column "Desktop" FALSE "BSPWM" FALSE "i3" FALSE "Sway" \
+        --button="Close:0" \
+        --button="Install:2" \
+        --button="Uninstall:4")
+        ret=$?
+
+        if [[ $ret -eq 0 ]]; then
+            close_app
+        fi
+
+        if [[ $ret -eq 2 ]]; then
+            action=$(echo $action | awk -F"|" '{print $2}')
+            if [[ ${action} ]]; then
+                install_desktop ${action}
+                check_desktop_configs "add" ${action}
+                install-extra-tool ${action}
+            else
+                ${0##*/}
+            fi
+        fi
+
+        if [[ $ret -eq 4 ]]; then
+            action=$(echo $action | awk -F"|" '{print $2}')
+            if [[ ${action} ]]; then
+                uninstall_desktop ${action}
+                check_desktop_configs "remove" ${action}
+                #uninstall-extra-tool ${action}
+            else
+                ${0##*/}
+            fi
+        fi
+    done
+}
+
+function check_sudo_password () {
+    if [[ ! $password ]]; then
+        password=$(yad --width=350 \
+            --title="Password" \
+            --text="Enter password for user <b>$USER</b>" \
+            --image="dialog-password" \
+            --entry --hide-text)
+
+        password_passed=$(echo $password | sudo -S ${0##*/} -- | grep "password_passed")
+        if [[ $password_passed ]]; then
+            eos-desktop-tool
+        else
+            check_sudo_password
+        fi
+        exit 0
+    fi
+}
+
+while true; do
+    case $1 in
+        --)
+            echo "password_passed"
+            break
+            ;;
+        *)
+            check_sudo_password
+            break
+            ;;
+    esac
+done
